@@ -1,0 +1,123 @@
+---
+# Basic usage examples for the dynamicrecords_rrset module
+#
+# Usage: ansible-playbook -i inventory basic.yml
+#
+# Make sure to set these variables:
+# - dns_api_url: URL of the DynamicRecords API
+# - dns_client_cert: Path to client certificate
+# - dns_client_key: Path to client key
+# - dns_ca_cert: Path to CA certificate
+
+- name: DynamicRecords Basic Examples
+  hosts: localhost
+  gather_facts: no
+
+  vars:
+    dns_api_url: "https://localhost:8053"
+    dns_client_cert: "/etc/ssl/certs/client.crt"
+    dns_client_key: "/etc/ssl/private/client.key"
+    dns_ca_cert: "/etc/ssl/certs/ca.crt"
+    domain: "example.com"
+
+  tasks:
+    - name: Add a single A record
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records:
+          - "web.{{ domain }}. 300 IN A 192.0.2.10"
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+      register: result
+
+    - name: Display result
+      debug:
+        var: result
+
+    - name: Add multiple A records (round-robin DNS)
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records:
+          - "app.{{ domain }}. 60 IN A 192.0.2.11"
+          - "app.{{ domain }}. 60 IN A 192.0.2.12"
+          - "app.{{ domain }}. 60 IN A 192.0.2.13"
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+
+    - name: Add AAAA record (IPv6)
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records:
+          - "ipv6.{{ domain }}. 300 IN AAAA 2001:db8::1"
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+
+    - name: Add CNAME record
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records:
+          - "www.{{ domain }}. 300 IN CNAME web.{{ domain }}."
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+
+    - name: Add TXT record
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records:
+          - '_verification.{{ domain }}. 120 IN TXT "v=verification1 token=abc123"'
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+
+    - name: Add MX records
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records:
+          - "{{ domain }}. 300 IN MX 10 mail1.{{ domain }}."
+          - "{{ domain }}. 300 IN MX 20 mail2.{{ domain }}."
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+
+    - name: Add SRV record for HTTP service
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records:
+          - "_http._tcp.{{ domain }}. 300 IN SRV 10 60 8080 server1.{{ domain }}."
+          - "_http._tcp.{{ domain }}. 300 IN SRV 10 40 8080 server2.{{ domain }}."
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+
+    - name: Add temporary record with expiry (expires in 1 hour)
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        expiry: "{{ ansible_date_time.epoch | int + 3600 }}"
+        records:
+          - "temp.{{ domain }}. 60 IN A 203.0.113.100"
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+
+    - name: Pause to let records propagate
+      pause:
+        seconds: 5
+        prompt: "Waiting for DNS records to be available..."
+
+    - name: Delete a specific record
+      dynamicrecords_rrset:
+        state: absent
+        api_url: "{{ dns_api_url }}"
+        records:
+          - "temp.{{ domain }}. 60 IN A 203.0.113.100"
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+
+    - name: Summary
+      debug:
+        msg: "All DNS records have been created successfully!"

@@ -1,0 +1,179 @@
+---
+# Load balancer pool management
+# Dynamically updates DNS records for load balancing pools
+#
+# Usage: ansible-playbook -i inventory load-balancer.yml
+
+- name: Update Load Balancer Pools
+  hosts: localhost
+  gather_facts: no
+
+  vars:
+    dns_api_url: "https://dns-server.example.com:8053"
+    dns_client_cert: "/etc/ssl/certs/dns-client.crt"
+    dns_client_key: "/etc/ssl/private/dns-client.key"
+    dns_ca_cert: "/etc/ssl/certs/dns-ca.crt"
+    lb_domain: "lb.example.com"
+    lb_ttl: 30  # Low TTL for fast updates
+
+  tasks:
+    - name: Gather facts from all web servers
+      setup:
+      delegate_to: "{{ item }}"
+      delegate_facts: yes
+      loop: "{{ groups['webservers'] }}"
+      when: groups['webservers'] is defined
+
+    - name: Check web server health
+      uri:
+        url: "http://{{ hostvars[item].ansible_default_ipv4.address }}/health"
+        method: GET
+        timeout: 5
+        status_code: 200
+      register: health_check
+      failed_when: false
+      loop: "{{ groups['webservers'] }}"
+      when: groups['webservers'] is defined
+
+    - name: Build list of healthy web servers
+      set_fact:
+        healthy_webservers: "{{ health_check.results | selectattr('status', 'defined') | selectattr('status', 'equalto', 200) | map(attribute='item') | list }}"
+      when: health_check.results is defined
+
+    - name: Display healthy servers
+      debug:
+        msg: "Healthy web servers: {{ healthy_webservers | default([]) }}"
+
+    - name: Update web pool DNS records (A records for healthy servers only)
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records: "{{ healthy_webservers | map('extract', hostvars, ['ansible_default_ipv4', 'address']) | map('regex_replace', '^(.*)$', 'web.' + lb_domain + '. ' + (lb_ttl | string) + ' IN A \\1') | list }}"
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+      when: healthy_webservers is defined and healthy_webservers | length > 0
+
+    - name: Remove DNS records if no healthy servers (delete all web records)
+      dynamicrecords_rrset:
+        state: absent
+        api_url: "{{ dns_api_url }}"
+        records: "{{ ['web.' + lb_domain + '. ' + (lb_ttl | string) + ' IN A 0.0.0.0'] }}"
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+      when: healthy_webservers is not defined or healthy_webservers | length == 0
+      failed_when: false
+
+    - name: Update API pool DNS records
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records: "{{ groups['api_servers'] | map('extract', hostvars, ['ansible_default_ipv4', 'address']) | map('regex_replace', '^(.*)$', 'api.' + lb_domain + '. ' + (lb_ttl | string) + ' IN A \\1') | list }}"
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+      when: groups['api_servers'] is defined and groups['api_servers'] | length > 0
+
+- name: Weighted Load Balancing Example
+  hosts: localhost
+  gather_facts: no
+
+  vars:
+    dns_api_url: "https://dns-server.example.com:8053"
+    dns_client_cert: "/etc/ssl/certs/dns-client.crt"
+    dns_client_key: "/etc/ssl/private/dns-client.key"
+    dns_ca_cert: "/etc/ssl/certs/dns-ca.crt"
+    service_domain: "svc.example.com"
+
+  tasks:
+    - name: Create weighted pool (repeat IPs based on weight)
+      set_fact:
+        weighted_pool:
+          - { host: "server1", ip: "192.0.2.10", weight: 3 }
+          - { host: "server2", ip: "192.0.2.11", weight: 2 }
+          - { host: "server3", ip: "192.0.2.12", weight: 1 }
+
+    - name: Build weighted record list
+      set_fact:
+        weighted_records: "{{ weighted_records | default([]) + [item.0.ip] * item.0.weight }}"
+      loop: "{{ weighted_pool | product([1]) | list }}"
+
+    - name: Update weighted DNS pool
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records: "{{ weighted_records | map('regex_replace', '^(.*)$', 'weighted.' + service_domain + '. 30 IN A \\1') | list }}"
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+
+- name: Geographic Load Balancing
+  hosts: localhost
+  gather_facts: no
+
+  vars:
+    dns_api_url: "https://dns-server.example.com:8053"
+    dns_client_cert: "/etc/ssl/certs/dns-client.crt"
+    dns_client_key: "/etc/ssl/private/dns-client.key"
+    dns_ca_cert: "/etc/ssl/certs/dns-ca.crt"
+    geo_domain: "geo.example.com"
+
+  tasks:
+    - name: Update US East pool
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records:
+          - "us-east.{{ geo_domain }}. 60 IN A 192.0.2.10"
+          - "us-east.{{ geo_domain }}. 60 IN A 192.0.2.11"
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+
+    - name: Update US West pool
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records:
+          - "us-west.{{ geo_domain }}. 60 IN A 203.0.113.10"
+          - "us-west.{{ geo_domain }}. 60 IN A 203.0.113.11"
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+
+    - name: Update Europe pool
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records:
+          - "eu.{{ geo_domain }}. 60 IN A 198.51.100.10"
+          - "eu.{{ geo_domain }}. 60 IN A 198.51.100.11"
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+
+- name: Blue-Green Deployment
+  hosts: localhost
+  gather_facts: no
+
+  vars:
+    dns_api_url: "https://dns-server.example.com:8053"
+    dns_client_cert: "/etc/ssl/certs/dns-client.crt"
+    dns_client_key: "/etc/ssl/private/dns-client.key"
+    dns_ca_cert: "/etc/ssl/certs/dns-ca.crt"
+    app_domain: "app.example.com"
+    active_environment: "blue"  # Set to "blue" or "green"
+
+  tasks:
+    - name: Set active pool based on environment
+      set_fact:
+        active_pool: "{{ groups[active_environment + '_servers'] }}"
+      when: groups[active_environment + '_servers'] is defined
+
+    - name: Update production DNS to active environment
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records: "{{ active_pool | map('extract', hostvars, ['ansible_default_ipv4', 'address']) | map('regex_replace', '^(.*)$', app_domain + '. 30 IN A \\1') | list }}"
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+      when: active_pool is defined
+
+    - name: Display active environment
+      debug:
+        msg: "Production traffic is now directed to {{ active_environment }} environment"

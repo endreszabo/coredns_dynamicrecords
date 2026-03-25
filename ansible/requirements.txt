@@ -1,0 +1,11 @@
+# Python dependencies for DynamicRecords Ansible module
+
+# HTTP client library with SSL/TLS support
+requests>=2.20.0
+
+# Optional: Better SSL/TLS security
+urllib3>=1.24.0
+certifi>=2019.11.0
+
+# Optional: For better certificate handling
+cryptography>=2.8

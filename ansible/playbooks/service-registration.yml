@@ -1,0 +1,133 @@
+---
+# Service registration example
+# Automatically registers hosts in DNS as services
+#
+# Usage: ansible-playbook -i inventory service-registration.yml
+
+- name: Register Services in DNS
+  hosts: all
+  gather_facts: yes
+
+  vars:
+    dns_api_url: "https://dns-server.example.com:8053"
+    dns_client_cert: "/etc/ssl/certs/dns-client.crt"
+    dns_client_key: "/etc/ssl/private/dns-client.key"
+    dns_ca_cert: "/etc/ssl/certs/dns-ca.crt"
+    service_domain: "service.local"
+    service_ttl: 60
+
+  tasks:
+    - name: Register host A record
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records:
+          - "{{ inventory_hostname }}.{{ service_domain }}. {{ service_ttl }} IN A {{ ansible_default_ipv4.address }}"
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+      delegate_to: localhost
+
+    - name: Register IPv6 address if available
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records:
+          - "{{ inventory_hostname }}.{{ service_domain }}. {{ service_ttl }} IN AAAA {{ ansible_default_ipv6.address }}"
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+      delegate_to: localhost
+      when: ansible_default_ipv6.address is defined
+
+- name: Register Web Servers
+  hosts: webservers
+  gather_facts: yes
+
+  vars:
+    dns_api_url: "https://dns-server.example.com:8053"
+    dns_client_cert: "/etc/ssl/certs/dns-client.crt"
+    dns_client_key: "/etc/ssl/private/dns-client.key"
+    dns_ca_cert: "/etc/ssl/certs/dns-ca.crt"
+    service_domain: "service.local"
+
+  tasks:
+    - name: Register web service SRV record
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records:
+          - "_http._tcp.{{ service_domain }}. 60 IN SRV 10 50 80 {{ inventory_hostname }}.{{ service_domain }}."
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+      delegate_to: localhost
+
+    - name: Register HTTPS service SRV record
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records:
+          - "_https._tcp.{{ service_domain }}. 60 IN SRV 10 50 443 {{ inventory_hostname }}.{{ service_domain }}."
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+      delegate_to: localhost
+
+- name: Register Database Servers
+  hosts: databases
+  gather_facts: yes
+
+  vars:
+    dns_api_url: "https://dns-server.example.com:8053"
+    dns_client_cert: "/etc/ssl/certs/dns-client.crt"
+    dns_client_key: "/etc/ssl/private/dns-client.key"
+    dns_ca_cert: "/etc/ssl/certs/dns-ca.crt"
+    service_domain: "service.local"
+    db_port: "{{ database_port | default(5432) }}"
+
+  tasks:
+    - name: Register database service SRV record
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records:
+          - "_postgresql._tcp.{{ service_domain }}. 60 IN SRV 10 50 {{ db_port }} {{ inventory_hostname }}.{{ service_domain }}."
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+      delegate_to: localhost
+
+- name: Create Service Aliases
+  hosts: localhost
+  gather_facts: no
+
+  vars:
+    dns_api_url: "https://dns-server.example.com:8053"
+    dns_client_cert: "/etc/ssl/certs/dns-client.crt"
+    dns_client_key: "/etc/ssl/private/dns-client.key"
+    dns_ca_cert: "/etc/ssl/certs/dns-ca.crt"
+    service_domain: "service.local"
+
+  tasks:
+    - name: Create web service alias (round-robin to all web servers)
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records: "{{ groups['webservers'] | map('extract', hostvars, ['ansible_default_ipv4', 'address']) | map('regex_replace', '^(.*)$', 'web.' + service_domain + '. 30 IN A \\1') | list }}"
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+      when: groups['webservers'] is defined and groups['webservers'] | length > 0
+
+    - name: Create database service alias (primary database)
+      dynamicrecords_rrset:
+        api_url: "{{ dns_api_url }}"
+        records:
+          - "db.{{ service_domain }}. 60 IN CNAME {{ groups['databases'][0] }}.{{ service_domain }}."
+        client_cert: "{{ dns_client_cert }}"
+        client_key: "{{ dns_client_key }}"
+        ca_cert: "{{ dns_ca_cert }}"
+      when: groups['databases'] is defined and groups['databases'] | length > 0
+
+    - name: Display summary
+      debug:
+        msg:
+          - "Service registration complete!"
+          - "Web servers: {{ groups['webservers'] | default([]) | length }}"
+          - "Database servers: {{ groups['databases'] | default([]) | length }}"
+          - "Total hosts registered: {{ groups['all'] | length }}"
