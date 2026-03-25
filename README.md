@@ -1,12 +1,14 @@
 # DynamicRecords - CoreDNS Plugin
 
-A CoreDNS plugin that serves DNS records from an in-memory buffer populated via an mTLS-protected HTTPS API. Records have configurable expiry times and are automatically cleaned up when expired.
+A CoreDNS plugin that serves DNS records from an in-memory buffer populated via an mTLS-protected HTTPS API or a FrameStreams streaming channel. Records have configurable expiry times and are automatically cleaned up when expired.
 
 ## Features
 
 - **In-memory buffer**: Fast DNS record storage with automatic expiry
 - **mTLS authentication**: Secure HTTPS API with mutual TLS authentication
+- **FrameStreams ingestion**: High-throughput binary streaming channel over TLS (ALPN `fstrm`)
 - **RFC1035 format**: Accept records in standard zone file format
+- **Consistent ACK/NACK responses**: Both HTTPS and FrameStreams return uniform `{"ok": bool, ...}` JSON
 - **Middleware behavior**: Augments downstream plugin responses
 - **Smart response handling**: Only adds records for NODATA (rcode 0 with no answers) or NXDOMAIN responses
 - **Transparent passthrough**: Preserves other response codes from downstream plugins
@@ -29,10 +31,11 @@ Add to your `Corefile`:
 ```
 example.com {
     dynamicrecords {
-        http_addr :8053
+        http_addr  :8053
+        fstrm_addr :8054
         cert /path/to/server.crt
-        key /path/to/server.key
-        ca /path/to/ca.crt
+        key  /path/to/server.key
+        ca   /path/to/ca.crt
         default_ttl 300
     }
     forward . 8.8.8.8
@@ -42,6 +45,7 @@ example.com {
 ### Configuration Options
 
 - **http_addr**: Address for the HTTPS API server (default: `:8053`)
+- **fstrm_addr**: Address for the FrameStreams TLS listener (optional; omit to disable)
 - **cert**: Path to server TLS certificate (required)
 - **key**: Path to server TLS private key (required)
 - **ca**: Path to CA certificate for client verification (required)
@@ -54,10 +58,11 @@ The plugin supports multiple server blocks (domains) while using a **single shar
 ```
 example.com {
     dynamicrecords {
-        http_addr :8053
+        http_addr  :8053
+        fstrm_addr :8054
         cert /path/to/server.crt
-        key /path/to/server.key
-        ca /path/to/ca.crt
+        key  /path/to/server.key
+        ca   /path/to/ca.crt
         default_ttl 300
     }
     forward . 8.8.8.8
@@ -65,24 +70,14 @@ example.com {
 
 example.org {
     dynamicrecords {
-        http_addr :8053
+        http_addr  :8053
+        fstrm_addr :8054
         cert /path/to/server.crt
-        key /path/to/server.key
-        ca /path/to/ca.crt
+        key  /path/to/server.key
+        ca   /path/to/ca.crt
         default_ttl 300
     }
     forward . 8.8.8.8
-}
-
-*.internal {
-    dynamicrecords {
-        http_addr :8053
-        cert /path/to/server.crt
-        key /path/to/server.key
-        ca /path/to/ca.crt
-        default_ttl 60
-    }
-    forward . 10.0.0.1
 }
 ```
 
@@ -94,7 +89,24 @@ example.org {
 - All domains share the same in-memory buffer
 - Records can be served across any domain (e.g., add a record for `test.example.com` and it will be served when querying the `example.com` server block)
 
-## API Endpoints
+## API Response Format
+
+All endpoints — both HTTPS and FrameStreams — return a uniform JSON envelope:
+
+```json
+{"ok": true,  "message": "Added 2 records for test.example.com./A"}
+{"ok": false, "error":   "invalid record format: ..."}
+```
+
+| Field     | Type   | Present when |
+|-----------|--------|--------------|
+| `ok`      | bool   | always       |
+| `message` | string | success only |
+| `error`   | string | failure only |
+
+All HTTPS error responses use `Content-Type: application/json` (not `text/plain`).
+
+## HTTPS API Endpoints
 
 ### Add Records
 
@@ -124,13 +136,16 @@ curl -X POST https://localhost:8053/records \
 - `ttl` (optional): TTL override in seconds (uses TTL from records or default_ttl if not provided)
 - `expiry` (optional): Unix timestamp when records should expire (defaults to now + TTL)
 
-**Response:**
+**Success response:**
 
 ```json
-{
-  "status": "success",
-  "message": "Added 2 records for test.example.com./A"
-}
+{"ok": true, "message": "Added 2 records for test.example.com./A"}
+```
+
+**Error response (HTTP 400):**
+
+```json
+{"ok": false, "error": "Record 1 has different qname: expected a.example.com., got b.example.com."}
 ```
 
 ### Delete Records
@@ -156,6 +171,12 @@ curl -X DELETE https://localhost:8053/records/delete \
 
 - `records` (required): Array of records in RFC1035 zone file format to delete. Only records that exactly match will be removed. QName and QType are automatically extracted.
 
+**Success response:**
+
+```json
+{"ok": true, "message": "Deleted 1 records for test.example.com./A"}
+```
+
 ### Health Check
 
 **GET /health**
@@ -175,8 +196,80 @@ curl https://localhost:8053/health \
 {
   "status": "healthy",
   "buffer_size": 42,
-  "plugin": "dynamicrecords"
+  "plugin": "dynamicrecords",
+  "instances": 1
 }
+```
+
+## FrameStreams Ingestion
+
+The optional FrameStreams channel (`fstrm_addr`) provides a persistent, streaming alternative to the HTTPS API for high-throughput ingestion.
+
+### Protocol
+
+- **Transport**: TLS 1.3 with mTLS (same certificates as the HTTPS listener)
+- **ALPN**: `fstrm` — distinguishes this listener from the HTTPS listener at the TLS layer
+- **Framing**: FrameStreams bidirectional protocol ([farsightsec/golang-framestream](https://github.com/farsightsec/golang-framestream))
+- **Content-type**: `application/x-dynamicrecords` — negotiated in the FrameStreams handshake
+
+### Frame payload
+
+Each data frame contains a JSON object:
+
+```json
+{
+  "op":      "add",
+  "ttl":     300,
+  "expiry":  1735689600,
+  "records": ["svc.example.com. 60 IN A 10.0.0.1"]
+}
+```
+
+| Field     | Type     | Required | Description |
+|-----------|----------|----------|-------------|
+| `op`      | string   | yes      | `"add"` or `"delete"` |
+| `records` | string[] | yes      | RFC1035 zone file records; all must share the same qname and qtype |
+| `ttl`     | uint32   | no       | TTL override (seconds); falls back to record TTL then `default_ttl` |
+| `expiry`  | int64    | no       | Unix timestamp expiry; takes precedence over `ttl` |
+
+### ACK/NACK responses
+
+After every data frame the server writes a JSON response directly on the connection:
+
+```
+Client → DATA frame {"op":"add","records":["svc.example.com. 60 IN A 10.0.0.1"]}
+Server → {"ok":true,"message":"Added 1 records for svc.example.com./A"}
+
+Client → DATA frame {"op":"add","records":["bad record"]}
+Server → {"ok":false,"error":"invalid record \"bad record\": dns: bad A A"}
+
+Client → CONTROL_STOP
+Server → CONTROL_FINISH
+```
+
+Responses are newline-delimited JSON written on the same TLS connection. The FrameStreams control frames (ACCEPT, FINISH) are handled by the library and do not interfere with the ACK stream.
+
+### Example client (Go)
+
+```go
+conn, _ := tls.Dial("tcp", "localhost:8054", tlsConfig) // tlsConfig with client cert
+w, _ := framestream.NewWriter(conn, &framestream.WriterOptions{
+    ContentTypes:  [][]byte{[]byte("application/x-dynamicrecords")},
+    Bidirectional: true,
+})
+dec := json.NewDecoder(conn)
+
+frame, _ := json.Marshal(map[string]any{
+    "op":      "add",
+    "records": []string{"svc.example.com. 60 IN A 10.0.0.1"},
+})
+w.WriteFrame(frame)
+w.Flush() // required — WriteFrame buffers internally
+
+var ack map[string]any
+dec.Decode(&ack) // {"ok":true,"message":"..."}
+
+w.Close() // sends CONTROL_STOP, waits for CONTROL_FINISH
 ```
 
 ## mTLS Setup
@@ -261,6 +354,7 @@ curl -X POST https://localhost:8053/records \
 - **mTLS is mandatory**: All API requests require valid client certificates
 - **TLS 1.3 only**: The server uses TLS 1.3 for maximum security
 - **Client verification**: Server verifies client certificates against the configured CA
+- **ALPN isolation**: The HTTPS listener advertises `h2`/`http/1.1`; the FrameStreams listener advertises `fstrm` — a client connecting to the wrong port will fail the TLS handshake
 - **Network isolation**: Consider running the API on a separate internal network
 - **Certificate management**: Rotate certificates regularly and revoke compromised ones
 
@@ -294,6 +388,13 @@ Records are automatically removed from the buffer when:
 2. Check that client certificate is signed by the CA
 3. Ensure certificates haven't expired
 4. Verify server is listening on the configured address
+
+### FrameStreams connection failures
+
+1. Verify `fstrm_addr` is set in the Corefile
+2. Confirm the client uses ALPN `fstrm` and content-type `application/x-dynamicrecords`
+3. Check that the client calls `Flush()` after each `WriteFrame`
+4. Review CoreDNS logs for handshake errors
 
 ### Plugin not loading
 

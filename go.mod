@@ -5,6 +5,7 @@ go 1.21
 require (
 	github.com/coredns/caddy v1.1.1
 	github.com/coredns/coredns v1.11.1
+	github.com/farsightsec/golang-framestream v0.3.0
 	github.com/miekg/dns v1.1.58
 )
 

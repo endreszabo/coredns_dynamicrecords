@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/coredns/coredns/plugin"
-	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
 )
 
@@ -21,8 +20,6 @@ func (dr *DynamicRecords) Name() string {
 
 // ServeDNS implements the plugin.Handler interface
 func (dr *DynamicRecords) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
-	state := request.Request{W: w, Req: r}
-
 	// Create a response writer wrapper to capture downstream responses
 	nw := &nonWriter{ResponseWriter: w, msg: new(dns.Msg)}
 

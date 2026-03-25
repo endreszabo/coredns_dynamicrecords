@@ -5,22 +5,27 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/yourusername/dynamicrecords/protocol"
 )
 
 // SharedServer is a singleton HTTP server shared across all plugin instances
 type SharedServer struct {
-	mu         sync.Mutex
-	server     *http.Server
-	buffer     *RRBuffer
-	instances  int
-	httpAddr   string
-	tlsConfig  *tls.Config
-	started    bool
-	defaultTTL uint32
+	mu            sync.Mutex
+	server        *http.Server
+	buffer        *RRBuffer
+	instances     int
+	httpAddr      string
+	fstrmAddr     string
+	tlsConfig     *tls.Config
+	started       bool
+	fstrmListener net.Listener
+	defaultTTL    uint32
 }
 
 var (
@@ -28,8 +33,9 @@ var (
 	sharedServer   *SharedServer
 )
 
-// GetOrCreateSharedServer returns the singleton shared server
-func GetOrCreateSharedServer(httpAddr string, certFile, keyFile, caFile string, defaultTTL uint32) (*SharedServer, error) {
+// GetOrCreateSharedServer returns the singleton shared server.
+// fstrmAddr may be empty to disable the FrameStreams listener.
+func GetOrCreateSharedServer(httpAddr, fstrmAddr string, certFile, keyFile, caFile string, defaultTTL uint32) (*SharedServer, error) {
 	sharedServerMu.Lock()
 	defer sharedServerMu.Unlock()
 
@@ -53,6 +59,7 @@ func GetOrCreateSharedServer(httpAddr string, certFile, keyFile, caFile string, 
 	sharedServer = &SharedServer{
 		buffer:     NewRRBuffer(),
 		httpAddr:   httpAddr,
+		fstrmAddr:  fstrmAddr,
 		tlsConfig:  tlsConfig,
 		instances:  1,
 		defaultTTL: defaultTTL,
@@ -61,7 +68,8 @@ func GetOrCreateSharedServer(httpAddr string, certFile, keyFile, caFile string, 
 	return sharedServer, nil
 }
 
-// Start starts the shared HTTP server if not already started
+// Start starts the shared HTTP server (and optional FrameStreams listener) if
+// not already started.
 func (s *SharedServer) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -75,23 +83,41 @@ func (s *SharedServer) Start() error {
 	mux.HandleFunc("/records/delete", s.handleDelete)
 	mux.HandleFunc("/health", s.handleHealth)
 
+	// Clone TLS config and set ALPN for HTTP.
+	httpTLS := s.tlsConfig.Clone()
+	httpTLS.NextProtos = []string{"h2", "http/1.1"}
+
 	s.server = &http.Server{
 		Addr:      s.httpAddr,
 		Handler:   mux,
-		TLSConfig: s.tlsConfig,
+		TLSConfig: httpTLS,
 	}
 
 	go func() {
 		if err := s.server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
-			fmt.Printf("Shared HTTP server error: %v\n", err)
+			fmt.Printf("dynamicrecords: HTTP server error: %v\n", err)
 		}
 	}()
+
+	// Start FrameStreams listener if configured.
+	if s.fstrmAddr != "" {
+		fstrmTLS := s.tlsConfig.Clone()
+		fstrmTLS.NextProtos = []string{protocol.FstrmALPN}
+
+		ln, err := tls.Listen("tcp", s.fstrmAddr, fstrmTLS)
+		if err != nil {
+			return fmt.Errorf("dynamicrecords: fstrm listener on %s: %v", s.fstrmAddr, err)
+		}
+		s.fstrmListener = ln
+		go s.acceptFstrmConns(ln)
+	}
 
 	s.started = true
 	return nil
 }
 
-// Unregister decrements the instance counter and stops the server if this was the last instance
+// Unregister decrements the instance counter and stops the server if this was
+// the last instance.
 func (s *SharedServer) Unregister() error {
 	sharedServerMu.Lock()
 	defer sharedServerMu.Unlock()
@@ -107,6 +133,12 @@ func (s *SharedServer) Unregister() error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 
+		// Close FrameStreams listener first; this unblocks acceptFstrmConns.
+		if s.fstrmListener != nil {
+			s.fstrmListener.Close()
+			s.fstrmListener = nil
+		}
+
 		if s.server != nil && s.started {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -120,7 +152,8 @@ func (s *SharedServer) Unregister() error {
 	return nil
 }
 
-// createTLSConfig creates a TLS configuration for mTLS
+// createTLSConfig creates a base TLS configuration for mTLS.
+// NextProtos is intentionally left unset so callers can set it per-listener.
 func createTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
 	// Load server certificate
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
