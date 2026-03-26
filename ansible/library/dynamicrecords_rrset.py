@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 
-# Copyright: (c) 2025, Your Name <your.email@example.com>
+# Copyright: (c) 2025, Endre Szabo
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
 from __future__ import absolute_import, division, print_function
@@ -18,7 +18,7 @@ description:
     - Requires mTLS authentication with client certificates
     - Records have configurable TTL and expiry times
 author:
-    - Your Name (@yourusername)
+    - Endre Szabo
 options:
     state:
         description:

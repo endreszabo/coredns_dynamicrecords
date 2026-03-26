@@ -23,7 +23,7 @@ import (
 
 	framestream "github.com/farsightsec/golang-framestream"
 
-	"github.com/yourusername/dynamicrecords/protocol"
+	"github.com/endreszabo/coredns_dynamicrecords/protocol"
 )
 
 func main() {

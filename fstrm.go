@@ -9,7 +9,7 @@ import (
 	framestream "github.com/farsightsec/golang-framestream"
 	"github.com/miekg/dns"
 
-	"github.com/yourusername/dynamicrecords/protocol"
+	"github.com/endreszabo/coredns_dynamicrecords/protocol"
 )
 
 // FstrmContentType and FstrmFrame are re-exported from the protocol package

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yourusername/dynamicrecords/protocol"
+	"github.com/endreszabo/coredns_dynamicrecords/protocol"
 )
 
 // SharedServer is a singleton HTTP server shared across all plugin instances

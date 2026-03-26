@@ -1,4 +1,4 @@
-module github.com/yourusername/dynamicrecords
+module github.com/endreszabo/coredns_dynamicrecords
 
 go 1.21
 

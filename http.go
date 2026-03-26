@@ -9,7 +9,7 @@ import (
 
 	"github.com/miekg/dns"
 
-	"github.com/yourusername/dynamicrecords/protocol"
+	"github.com/endreszabo/coredns_dynamicrecords/protocol"
 )
 
 // APIResponse is a type alias for protocol.APIResponse so existing code in

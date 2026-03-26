@@ -304,7 +304,7 @@ To use this plugin, you need to compile it into CoreDNS:
 1. Create a `plugin.cfg` file or modify CoreDNS's existing one:
 
 ```
-dynamicrecords:github.com/yourusername/dynamicrecords
+dynamicrecords:github.com/endreszabo/coredns_dynamicrecords
 ```
 
 2. Build CoreDNS with the plugin:
@@ -312,8 +312,8 @@ dynamicrecords:github.com/yourusername/dynamicrecords
 ```bash
 git clone https://github.com/coredns/coredns
 cd coredns
-echo "dynamicrecords:github.com/yourusername/dynamicrecords" >> plugin.cfg
-go get github.com/yourusername/dynamicrecords
+echo "dynamicrecords:github.com/endreszabo/coredns_dynamicrecords" >> plugin.cfg
+go get github.com/endreszabo/coredns_dynamicrecords
 go generate
 go build
 ```
