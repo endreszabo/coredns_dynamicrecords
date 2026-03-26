@@ -318,6 +318,10 @@ go generate
 go build
 ```
 
+## Monitoring
+
+A pre-built Grafana dashboard is available in the `examples/` directory to help you monitor the DynamicRecords plugin metrics. See [examples/README.md](examples/README.md) for detailed instructions on importing and using the dashboard.
+
 ## Example Use Cases
 
 ### Dynamic DNS Updates
@@ -371,6 +375,166 @@ Records are automatically removed from the buffer when:
 - **Low latency**: In-memory storage provides fast lookups
 - **Automatic cleanup**: Background goroutine removes expired entries every minute
 - **Minimal overhead**: Only processes queries when downstream returns NODATA or NXDOMAIN
+
+## Prometheus Metrics
+
+The plugin exports Prometheus metrics that are exposed through CoreDNS's built-in `metrics` plugin. To enable metrics collection, add the `metrics` plugin to your Corefile:
+
+```
+example.com {
+    dynamicrecords {
+        http_addr  :8053
+        fstrm_addr :8054
+        cert /path/to/server.crt
+        key  /path/to/server.key
+        ca   /path/to/ca.crt
+        default_ttl 300
+    }
+    forward . 8.8.8.8
+}
+
+# Add metrics plugin (usually at the end)
+example.com {
+    metrics :8053
+}
+```
+
+The metrics will be available on the metrics plugin's endpoint (e.g., `http://localhost:8053/metrics`).
+
+### Available Metrics
+
+#### Buffer Lookup Metrics
+`coredns_dynamicrecords_buffer_lookup_count_total` - Counter
+
+Number of buffer lookups for DNS query responses.
+
+**Labels:**
+- `result`: "hit" (records found in buffer) or "miss" (no records found)
+- `rcode`: Downstream DNS response code (e.g., "NXDOMAIN", "NOERROR")
+
+**Example use cases:**
+- Monitor record injection success rate to assess dynamic records effectiveness
+- Track which response codes trigger buffer lookups
+- Identify patterns in query behavior
+
+**PromQL examples:**
+```promql
+# Record injection success rate
+rate(coredns_dynamicrecords_buffer_lookup_count_total{result="hit"}[5m]) /
+(rate(coredns_dynamicrecords_buffer_lookup_count_total{result="hit"}[5m]) +
+ rate(coredns_dynamicrecords_buffer_lookup_count_total{result="miss"}[5m]))
+
+# Lookups by response code
+rate(coredns_dynamicrecords_buffer_lookup_count_total[5m]) by (rcode)
+```
+
+#### Operation Metrics
+`coredns_dynamicrecords_operations_count_total` - Counter
+
+Number of add/remove operations via the API.
+
+**Labels:**
+- `operation`: "add" or "remove"
+- `protocol`: "http" or "framestreams"
+- `result`: "success" or "error"
+
+**Example use cases:**
+- Monitor API usage patterns and throughput
+- Track error rates per transport protocol
+- Compare HTTP vs FrameStreams usage
+- Alert on high error rates
+
+**PromQL examples:**
+```promql
+# Error rate by protocol
+rate(coredns_dynamicrecords_operations_count_total{result="error"}[5m]) by (protocol)
+
+# Operations per second
+rate(coredns_dynamicrecords_operations_count_total[5m])
+
+# Add vs remove ratio
+rate(coredns_dynamicrecords_operations_count_total{operation="add"}[5m]) /
+rate(coredns_dynamicrecords_operations_count_total{operation="remove"}[5m])
+```
+
+### Accessing Metrics
+
+The metrics endpoint is provided by CoreDNS's `metrics` plugin. Refer to the [CoreDNS metrics documentation](https://coredns.io/plugins/metrics/) for configuration options.
+
+```bash
+curl http://localhost:8053/metrics
+```
+
+**Note:** The metrics endpoint uses the standard Prometheus exposition format, making it compatible with Prometheus servers and other monitoring systems.
+
+### Available Metrics
+
+#### Buffer Lookup Metrics
+`coredns_dynamicrecords_buffer_lookup_count_total` - Counter
+
+Number of buffer lookups for DNS query responses.
+
+**Labels:**
+- `result`: "hit" (records found in buffer) or "miss" (no records found)
+- `rcode`: Downstream DNS response code (e.g., "NXDOMAIN", "NOERROR")
+
+**Example use cases:**
+- Monitor record injection success rate to assess dynamic records effectiveness
+- Track which response codes trigger buffer lookups
+- Identify patterns in query behavior
+
+**PromQL examples:**
+```promql
+# Record injection success rate
+rate(coredns_dynamicrecords_buffer_lookup_count_total{result="hit"}[5m]) /
+(rate(coredns_dynamicrecords_buffer_lookup_count_total{result="hit"}[5m]) +
+ rate(coredns_dynamicrecords_buffer_lookup_count_total{result="miss"}[5m]))
+
+# Lookups by response code
+rate(coredns_dynamicrecords_buffer_lookup_count_total[5m]) by (rcode)
+```
+
+#### Operation Metrics
+`coredns_dynamicrecords_operations_count_total` - Counter
+
+Number of add/remove operations via the API.
+
+**Labels:**
+- `operation`: "add" or "remove"
+- `protocol`: "http" or "framestreams"
+- `result`: "success" or "error"
+
+**Example use cases:**
+- Monitor API usage patterns and throughput
+- Track error rates per transport protocol
+- Compare HTTP vs FrameStreams usage
+- Alert on high error rates
+
+**PromQL examples:**
+```promql
+# Error rate by protocol
+rate(coredns_dynamicrecords_operations_count_total{result="error"}[5m]) by (protocol)
+
+# Operations per second
+rate(coredns_dynamicrecords_operations_count_total[5m])
+
+# Add vs remove ratio
+rate(coredns_dynamicrecords_operations_count_total{operation="add"}[5m]) /
+rate(coredns_dynamicrecords_operations_count_total{operation="remove"}[5m])
+```
+
+### Accessing Metrics
+
+The metrics endpoint is protected by the same mTLS configuration as the API endpoints:
+
+```bash
+curl https://localhost:8053/metrics \
+  --cert client.crt \
+  --key client.key \
+  --cacert ca.crt
+```
+
+**Note:** The metrics endpoint uses the standard Prometheus exposition format, making it compatible with Prometheus servers and other monitoring systems.
 
 ## Troubleshooting
 

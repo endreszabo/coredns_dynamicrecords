@@ -40,6 +40,7 @@ func (s *SharedServer) handleRecords(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		operationsCount.WithLabelValues("add", "http", "error").Inc()
 		jsonError(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
@@ -47,11 +48,13 @@ func (s *SharedServer) handleRecords(w http.ResponseWriter, r *http.Request) {
 
 	var req RRSetRequest
 	if err := json.Unmarshal(body, &req); err != nil {
+		operationsCount.WithLabelValues("add", "http", "error").Inc()
 		jsonError(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
 		return
 	}
 
 	if len(req.Records) == 0 {
+		operationsCount.WithLabelValues("add", "http", "error").Inc()
 		jsonError(w, "Missing required field: records", http.StatusBadRequest)
 		return
 	}
@@ -60,6 +63,7 @@ func (s *SharedServer) handleRecords(w http.ResponseWriter, r *http.Request) {
 	for _, recordStr := range req.Records {
 		rr, err := dns.NewRR(recordStr)
 		if err != nil {
+			operationsCount.WithLabelValues("add", "http", "error").Inc()
 			jsonError(w, fmt.Sprintf("Invalid record format: %v", err), http.StatusBadRequest)
 			return
 		}
@@ -72,10 +76,12 @@ func (s *SharedServer) handleRecords(w http.ResponseWriter, r *http.Request) {
 
 	for i, rr := range records {
 		if rr.Header().Name != qname {
+			operationsCount.WithLabelValues("add", "http", "error").Inc()
 			jsonError(w, fmt.Sprintf("Record %d has different qname: expected %s, got %s", i, qname, rr.Header().Name), http.StatusBadRequest)
 			return
 		}
 		if rr.Header().Rrtype != qtype {
+			operationsCount.WithLabelValues("add", "http", "error").Inc()
 			jsonError(w, fmt.Sprintf("Record %d has different qtype: expected %s, got %s", i, dns.TypeToString[qtype], dns.TypeToString[rr.Header().Rrtype]), http.StatusBadRequest)
 			return
 		}
@@ -96,6 +102,7 @@ func (s *SharedServer) handleRecords(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.buffer.Add(qname, qtype, records, expiry)
+	operationsCount.WithLabelValues("add", "http", "success").Inc()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -114,6 +121,7 @@ func (s *SharedServer) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		operationsCount.WithLabelValues("remove", "http", "error").Inc()
 		jsonError(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
@@ -121,11 +129,13 @@ func (s *SharedServer) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 	var req RRSetRequest
 	if err := json.Unmarshal(body, &req); err != nil {
+		operationsCount.WithLabelValues("remove", "http", "error").Inc()
 		jsonError(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
 		return
 	}
 
 	if len(req.Records) == 0 {
+		operationsCount.WithLabelValues("remove", "http", "error").Inc()
 		jsonError(w, "Missing required field: records", http.StatusBadRequest)
 		return
 	}
@@ -134,6 +144,7 @@ func (s *SharedServer) handleDelete(w http.ResponseWriter, r *http.Request) {
 	for _, recordStr := range req.Records {
 		rr, err := dns.NewRR(recordStr)
 		if err != nil {
+			operationsCount.WithLabelValues("remove", "http", "error").Inc()
 			jsonError(w, fmt.Sprintf("Invalid record format: %v", err), http.StatusBadRequest)
 			return
 		}
@@ -146,16 +157,19 @@ func (s *SharedServer) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 	for i, rr := range recordsToDelete {
 		if rr.Header().Name != qname {
+			operationsCount.WithLabelValues("remove", "http", "error").Inc()
 			jsonError(w, fmt.Sprintf("Record %d has different qname: expected %s, got %s", i, qname, rr.Header().Name), http.StatusBadRequest)
 			return
 		}
 		if rr.Header().Rrtype != qtype {
+			operationsCount.WithLabelValues("remove", "http", "error").Inc()
 			jsonError(w, fmt.Sprintf("Record %d has different qtype: expected %s, got %s", i, dns.TypeToString[qtype], dns.TypeToString[rr.Header().Rrtype]), http.StatusBadRequest)
 			return
 		}
 	}
 
 	deleted := s.buffer.DeleteRecords(qname, qtype, recordsToDelete)
+	operationsCount.WithLabelValues("remove", "http", "success").Inc()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

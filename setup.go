@@ -9,14 +9,16 @@ import (
 	"github.com/coredns/coredns/plugin"
 )
 
+const pluginName = "dynamicrecords"
+
 func init() {
-	plugin.Register("dynamicrecords", setup)
+	plugin.Register(pluginName, setup)
 }
 
 func setup(c *caddy.Controller) error {
 	dr, sharedServer, err := parseDynamicRecords(c)
 	if err != nil {
-		return plugin.Error("dynamicrecords", err)
+		return plugin.Error(pluginName, err)
 	}
 
 	dnsserver.GetConfig(c).AddPlugin(func(next plugin.Handler) plugin.Handler {

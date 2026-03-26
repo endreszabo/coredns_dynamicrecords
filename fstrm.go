@@ -80,6 +80,7 @@ func (s *SharedServer) handleFstrmConn(conn net.Conn) {
 // It returns a human-readable success message and any error.
 func (s *SharedServer) processFstrmFrame(f *FstrmFrame) (string, error) {
 	if len(f.Records) == 0 {
+		operationsCount.WithLabelValues("add", "framestreams", "error").Inc()
 		return "", fmt.Errorf("missing records field")
 	}
 
@@ -87,6 +88,7 @@ func (s *SharedServer) processFstrmFrame(f *FstrmFrame) (string, error) {
 	for _, rs := range f.Records {
 		rr, err := dns.NewRR(rs)
 		if err != nil {
+			operationsCount.WithLabelValues("add", "framestreams", "error").Inc()
 			return "", fmt.Errorf("invalid record %q: %v", rs, err)
 		}
 		records = append(records, rr)
@@ -98,6 +100,7 @@ func (s *SharedServer) processFstrmFrame(f *FstrmFrame) (string, error) {
 
 	for i, rr := range records[1:] {
 		if rr.Header().Name != qname || rr.Header().Rrtype != qtype {
+			operationsCount.WithLabelValues("add", "framestreams", "error").Inc()
 			return "", fmt.Errorf("record %d: mixed qname/qtype in single frame", i+1)
 		}
 	}
@@ -118,13 +121,16 @@ func (s *SharedServer) processFstrmFrame(f *FstrmFrame) (string, error) {
 			expiry = time.Now().Add(time.Duration(ttl) * time.Second)
 		}
 		s.buffer.Add(qname, qtype, records, expiry)
+		operationsCount.WithLabelValues("add", "framestreams", "success").Inc()
 		return fmt.Sprintf("Added %d records for %s/%s", len(records), qname, dns.TypeToString[qtype]), nil
 
 	case "delete":
 		deleted := s.buffer.DeleteRecords(qname, qtype, records)
+		operationsCount.WithLabelValues("remove", "framestreams", "success").Inc()
 		return fmt.Sprintf("Deleted %d records for %s/%s", deleted, qname, dns.TypeToString[qtype]), nil
 
 	default:
+		operationsCount.WithLabelValues(f.Op, "framestreams", "error").Inc()
 		return "", fmt.Errorf("unknown op %q (want \"add\" or \"delete\")", f.Op)
 	}
 }

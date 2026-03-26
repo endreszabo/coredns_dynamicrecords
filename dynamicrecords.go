@@ -15,7 +15,7 @@ type DynamicRecords struct {
 
 // Name returns the plugin name
 func (dr *DynamicRecords) Name() string {
-	return "dynamicrecords"
+	return pluginName
 }
 
 // ServeDNS implements the plugin.Handler interface
@@ -42,6 +42,14 @@ func (dr *DynamicRecords) ServeDNS(ctx context.Context, w dns.ResponseWriter, r 
 
 		// Try to get records from shared buffer
 		records := dr.sharedServer.buffer.Get(q.Name, q.Qtype)
+
+		// Track buffer lookup result
+		rcodeStr := dns.RcodeToString[msg.Rcode]
+		if len(records) > 0 {
+			bufferLookupCount.WithLabelValues("hit", rcodeStr).Inc()
+		} else {
+			bufferLookupCount.WithLabelValues("miss", rcodeStr).Inc()
+		}
 
 		if len(records) > 0 {
 			// We have records to append, set rcode to success

@@ -7,6 +7,7 @@ require (
 	github.com/coredns/coredns v1.11.1
 	github.com/farsightsec/golang-framestream v0.3.0
 	github.com/miekg/dns v1.1.58
+	github.com/prometheus/client_golang v1.16.0
 )
 
 require (
@@ -22,7 +23,6 @@ require (
 	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
 	github.com/onsi/ginkgo/v2 v2.11.0 // indirect
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
-	github.com/prometheus/client_golang v1.16.0 // indirect
 	github.com/prometheus/client_model v0.4.0 // indirect
 	github.com/prometheus/common v0.44.0 // indirect
 	github.com/prometheus/procfs v0.10.1 // indirect
