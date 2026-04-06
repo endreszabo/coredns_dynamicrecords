@@ -1,11 +1,14 @@
 package dynamicrecords
 
 import (
+	"sync"
+
 	"github.com/coredns/coredns/plugin"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
+	metricsOnce       sync.Once
 	bufferLookupCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: plugin.Namespace,
