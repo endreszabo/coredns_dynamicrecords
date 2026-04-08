@@ -26,9 +26,9 @@ func jsonError(w http.ResponseWriter, msg string, code int) {
 
 // RRSetRequest represents the JSON payload for adding/deleting records
 type RRSetRequest struct {
-	TTL     uint32   `json:"ttl"`     // Optional: override TTL from records
-	Expiry  int64    `json:"expiry"`  // Unix timestamp, optional
+	Expiry  int64    `json:"expiry"`  // required Unix timestamp
 	Records []string `json:"records"` // RFC1035 zone file format (required)
+	Replace bool     `json:"replace"` // if true, replace all existing batches for this qname+qtype (add only)
 }
 
 // handleRecords handles POST requests to add RRsets
@@ -87,21 +87,19 @@ func (s *SharedServer) handleRecords(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var expiry time.Time
-	if req.Expiry > 0 {
-		expiry = time.Unix(req.Expiry, 0)
-	} else {
-		ttl := req.TTL
-		if ttl == 0 {
-			ttl = firstRecord.Header().Ttl
+	if req.Expiry == 0 {
+		operationsCount.WithLabelValues("add", "http", "error").Inc()
+		jsonError(w, "Missing required field: expiry", http.StatusBadRequest)
+		return
+	}
+	expiry := time.Unix(req.Expiry, 0)
+	for _, rr := range records {
+		if rr.Header().Ttl == 0 {
+			rr.Header().Ttl = s.defaultTTL
 		}
-		if ttl == 0 {
-			ttl = s.defaultTTL
-		}
-		expiry = time.Now().Add(time.Duration(ttl) * time.Second)
 	}
 
-	s.buffer.Add(qname, qtype, records, expiry)
+	s.buffer.Add(qname, qtype, records, expiry, req.Replace)
 	operationsCount.WithLabelValues("add", "http", "success").Inc()
 
 	w.Header().Set("Content-Type", "application/json")

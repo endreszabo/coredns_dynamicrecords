@@ -12,7 +12,7 @@ import (
 // handler unit tests (no TLS, no listener).
 func newTestServer() *SharedServer {
 	return &SharedServer{
-		buffer:     NewRRBuffer(),
+		buffer:     NewRRBuffer(0),
 		defaultTTL: 300,
 	}
 }
@@ -58,7 +58,7 @@ func TestJsonError(t *testing.T) {
 
 func TestHandleRecords_Success(t *testing.T) {
 	s := newTestServer()
-	body := `{"records": ["test.example.com. 300 IN A 192.0.2.1", "test.example.com. 300 IN A 192.0.2.2"]}`
+	body := `{"expiry": 9999999999, "records": ["test.example.com. 300 IN A 192.0.2.1", "test.example.com. 300 IN A 192.0.2.2"]}`
 	req := httptest.NewRequest(http.MethodPost, "/records", bytes.NewBufferString(body))
 	w := httptest.NewRecorder()
 	s.handleRecords(w, req)
@@ -74,6 +74,22 @@ func TestHandleRecords_Success(t *testing.T) {
 	}
 	if resp.Message == "" {
 		t.Error("expected non-empty message")
+	}
+}
+
+func TestHandleRecords_MissingExpiry(t *testing.T) {
+	s := newTestServer()
+	body := `{"records": ["test.example.com. 300 IN A 192.0.2.1"]}`
+	req := httptest.NewRequest(http.MethodPost, "/records", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	s.handleRecords(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want 400", w.Code)
+	}
+	resp := decodeResponse(t, w)
+	if resp.OK {
+		t.Error("expected ok:false")
 	}
 }
 
@@ -181,7 +197,7 @@ func TestHandleDelete_Success(t *testing.T) {
 	s := newTestServer()
 
 	// Pre-populate buffer via handleRecords
-	addBody := `{"records": ["del.example.com. 300 IN A 10.0.0.1"]}`
+	addBody := `{"expiry": 9999999999, "records": ["del.example.com. 300 IN A 10.0.0.1"]}`
 	addReq := httptest.NewRequest(http.MethodPost, "/records", bytes.NewBufferString(addBody))
 	s.handleRecords(httptest.NewRecorder(), addReq)
 

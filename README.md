@@ -5,6 +5,7 @@ A CoreDNS plugin that serves DNS records from an in-memory buffer populated via 
 ## Features
 
 - **In-memory buffer**: Fast DNS record storage with automatic expiry
+- **Multi-batch RRsets**: Multiple independent record batches per (qname, qtype) — essential for ACME DNS-01 wildcard challenges
 - **mTLS authentication**: Secure HTTPS API with mutual TLS authentication
 - **FrameStreams ingestion**: High-throughput binary streaming channel over TLS (ALPN `fstrm`)
 - **RFC1035 format**: Accept records in standard zone file format
@@ -31,12 +32,13 @@ Add to your `Corefile`:
 ```
 example.com {
     dynamicrecords {
-        http_addr  :8053
-        fstrm_addr :8054
-        cert /path/to/server.crt
-        key  /path/to/server.key
-        ca   /path/to/ca.crt
-        default_ttl 300
+        http_addr        :8053
+        fstrm_addr       :8054
+        cert             /path/to/server.crt
+        key              /path/to/server.key
+        ca               /path/to/ca.crt
+        default_ttl      300
+        cleanup_interval 60
     }
     forward . 8.8.8.8
 }
@@ -50,6 +52,7 @@ example.com {
 - **key**: Path to server TLS private key (required)
 - **ca**: Path to CA certificate for client verification (required)
 - **default_ttl**: Default TTL in seconds if not specified in API request (default: `300`)
+- **cleanup_interval**: How often the background goroutine scans for and removes expired batches, in seconds (default: `60`)
 
 ### Multiple Domains (Shared HTTP Server)
 
@@ -112,9 +115,14 @@ All HTTPS error responses use `Content-Type: application/json` (not `text/plain`
 
 **POST /records**
 
-Add or update an RRset in the buffer.
+Add a new batch of records to the buffer. By default (`"replace": false`) the batch is
+**appended** alongside any existing batches for the same qname+qtype, so multiple
+independent callers (e.g. two cert-renewal jobs) can each publish their own records and
+have them all served simultaneously. Pass `"replace": true` to discard all existing
+batches and replace them with this one.
 
 ```bash
+# Append a new batch (default — does not disturb other batches)
 curl -X POST https://localhost:8053/records \
   --cert client.crt \
   --key client.key \
@@ -122,19 +130,33 @@ curl -X POST https://localhost:8053/records \
   -H "Content-Type: application/json" \
   -d '{
     "ttl": 300,
-    "expiry": 1735689600,
     "records": [
       "test.example.com. 300 IN A 192.0.2.1",
       "test.example.com. 300 IN A 192.0.2.2"
     ]
   }'
+
+# Replace all existing batches with a single new one
+curl -X POST https://localhost:8053/records \
+  --cert client.crt \
+  --key client.key \
+  --cacert ca.crt \
+  -H "Content-Type: application/json" \
+  -d '{
+    "replace": true,
+    "ttl": 300,
+    "records": ["test.example.com. 300 IN A 192.0.2.1"]
+  }'
 ```
 
 **Request Fields:**
 
-- `records` (required): Array of records in RFC1035 zone file format. QName and QType are automatically extracted from these records. All records must have the same qname and qtype.
-- `ttl` (optional): TTL override in seconds (uses TTL from records or default_ttl if not provided)
-- `expiry` (optional): Unix timestamp when records should expire (defaults to now + TTL)
+| Field | Required | Description |
+|-------|----------|-------------|
+| `records` | yes | Array of records in RFC1035 zone file format. All records must share the same qname and qtype. |
+| `replace` | no | `false` (default): append as a new independent batch. `true`: discard all existing batches for this qname+qtype and store only this one. |
+| `ttl` | no | TTL override in seconds. Falls back to the TTL in the record, then `default_ttl`. |
+| `expiry` | no | Unix timestamp when this batch expires. Overrides `ttl` if both are given. |
 
 **Success response:**
 
@@ -152,7 +174,9 @@ curl -X POST https://localhost:8053/records \
 
 **DELETE /records/delete** or **POST /records/delete**
 
-Remove specific records from the buffer by matching exact RR values.
+Remove the **first batch** whose records exactly match the provided list (multiset equality,
+order-insensitive). Exactly one batch is removed per request, so if two identical batches
+exist you must call this endpoint twice.
 
 ```bash
 curl -X DELETE https://localhost:8053/records/delete \
@@ -169,7 +193,7 @@ curl -X DELETE https://localhost:8053/records/delete \
 
 **Request Fields:**
 
-- `records` (required): Array of records in RFC1035 zone file format to delete. Only records that exactly match will be removed. QName and QType are automatically extracted.
+- `records` (required): Array of records in RFC1035 zone file format that identify the batch to remove. The batch must contain exactly these records (no more, no less). QName and QType are automatically extracted.
 
 **Success response:**
 
@@ -221,6 +245,7 @@ Each data frame contains a JSON object:
   "op":      "add",
   "ttl":     300,
   "expiry":  1735689600,
+  "replace": false,
   "records": ["svc.example.com. 60 IN A 10.0.0.1"]
 }
 ```
@@ -229,6 +254,7 @@ Each data frame contains a JSON object:
 |-----------|----------|----------|-------------|
 | `op`      | string   | yes      | `"add"` or `"delete"` |
 | `records` | string[] | yes      | RFC1035 zone file records; all must share the same qname and qtype |
+| `replace` | bool     | no       | `op:"add"` only. `false` (default): append as new batch. `true`: replace all existing batches for this qname+qtype. |
 | `ttl`     | uint32   | no       | TTL override (seconds); falls back to record TTL then `default_ttl` |
 | `expiry`  | int64    | no       | Unix timestamp expiry; takes precedence over `ttl` |
 
@@ -324,6 +350,32 @@ A pre-built Grafana dashboard is available in the `examples/` directory to help 
 
 ## Example Use Cases
 
+### ACME DNS-01 Wildcard Challenges
+
+Wildcard certificates require two simultaneous `_acme-challenge` TXT tokens when two
+cert-renewal jobs run concurrently. With the default append semantics, each job publishes
+its own batch without disturbing the other:
+
+```bash
+# Job 1 — publishes token1
+curl -X POST https://localhost:8053/records \
+  --cert client.crt --key client.key --cacert ca.crt \
+  -H "Content-Type: application/json" \
+  -d '{"ttl":120,"records":["_acme-challenge.example.com. 120 IN TXT \"token1\""]}'
+
+# Job 2 — publishes token2 (token1 is still there)
+curl -X POST https://localhost:8053/records \
+  --cert client.crt --key client.key --cacert ca.crt \
+  -H "Content-Type: application/json" \
+  -d '{"ttl":120,"records":["_acme-challenge.example.com. 120 IN TXT \"token2\""]}'
+
+# Both tokens are served; after validation each job removes only its own token:
+curl -X DELETE https://localhost:8053/records/delete \
+  --cert client.crt --key client.key --cacert ca.crt \
+  -H "Content-Type: application/json" \
+  -d '{"records":["_acme-challenge.example.com. 120 IN TXT \"token1\""]}'
+```
+
 ### Dynamic DNS Updates
 
 Use the API to dynamically update DNS records without reloading CoreDNS:
@@ -364,10 +416,13 @@ curl -X POST https://localhost:8053/records \
 
 ## Record Expiry
 
-Records are automatically removed from the buffer when:
-- The expiry time is reached (checked every minute)
-- They are explicitly deleted via the API
-- Expired records are never served in DNS responses
+Each batch carries its own independent expiry. When a batch expires it is removed without
+affecting other batches for the same (qname, qtype). Expiry is enforced at two points:
+
+- **On every DNS lookup**: expired batches are silently skipped (not served)
+- **Background cleanup**: a goroutine runs every minute and prunes expired batches
+
+Batches are also removed explicitly via the delete API.
 
 ## Performance
 

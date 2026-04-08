@@ -23,9 +23,9 @@ const FstrmContentType = "application/x-dynamicrecords"
 // endpoints via RRSetRequest.
 type FstrmFrame struct {
 	Op      string   `json:"op"`      // "add" or "delete" (required)
-	TTL     uint32   `json:"ttl"`     // optional TTL override in seconds
-	Expiry  int64    `json:"expiry"`  // optional Unix timestamp expiry
+	Expiry  int64    `json:"expiry"`  // required Unix timestamp expiry
 	Records []string `json:"records"` // RFC1035 zone file records (required)
+	Replace bool     `json:"replace"` // if true, replace all existing batches for this qname+qtype (op "add" only)
 }
 
 // APIResponse is the uniform JSON envelope returned after every operation on

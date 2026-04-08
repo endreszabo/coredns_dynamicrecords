@@ -16,16 +16,17 @@ import (
 
 // SharedServer is a singleton HTTP server shared across all plugin instances
 type SharedServer struct {
-	mu            sync.Mutex
-	server        *http.Server
-	buffer        *RRBuffer
-	instances     int
-	httpAddr      string
-	fstrmAddr     string
-	tlsConfig     *tls.Config
-	started       bool
-	fstrmListener net.Listener
-	defaultTTL    uint32
+	mu              sync.Mutex
+	server          *http.Server
+	buffer          *RRBuffer
+	instances       int
+	httpAddr        string
+	fstrmAddr       string
+	tlsConfig       *tls.Config
+	started         bool
+	fstrmListener   net.Listener
+	defaultTTL      uint32
+	cleanupInterval time.Duration
 }
 
 var (
@@ -35,7 +36,8 @@ var (
 
 // GetOrCreateSharedServer returns the singleton shared server.
 // fstrmAddr may be empty to disable the FrameStreams listener.
-func GetOrCreateSharedServer(httpAddr, fstrmAddr string, certFile, keyFile, caFile string, defaultTTL uint32) (*SharedServer, error) {
+// cleanupInterval sets how often expired batches are pruned; 0 uses the default (60s).
+func GetOrCreateSharedServer(httpAddr, fstrmAddr string, certFile, keyFile, caFile string, defaultTTL uint32, cleanupInterval time.Duration) (*SharedServer, error) {
 	sharedServerMu.Lock()
 	defer sharedServerMu.Unlock()
 
@@ -57,12 +59,13 @@ func GetOrCreateSharedServer(httpAddr, fstrmAddr string, certFile, keyFile, caFi
 
 	// Create new shared server
 	sharedServer = &SharedServer{
-		buffer:     NewRRBuffer(),
-		httpAddr:   httpAddr,
-		fstrmAddr:  fstrmAddr,
-		tlsConfig:  tlsConfig,
-		instances:  1,
-		defaultTTL: defaultTTL,
+		buffer:          NewRRBuffer(cleanupInterval),
+		httpAddr:        httpAddr,
+		fstrmAddr:       fstrmAddr,
+		tlsConfig:       tlsConfig,
+		instances:       1,
+		defaultTTL:      defaultTTL,
+		cleanupInterval: cleanupInterval,
 	}
 
 	return sharedServer, nil

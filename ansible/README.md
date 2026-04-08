@@ -61,9 +61,10 @@ pip install -r requirements.txt
 | `api_url` | Yes | str | - | URL of the DynamicRecords API (e.g., `https://dns:8053`) |
 | `qname` | Yes | str | - | Fully qualified domain name (with trailing dot) |
 | `qtype` | Yes | str | - | DNS record type (A, AAAA, CNAME, TXT, etc.) |
-| `records` | Conditional | list | - | List of records in RFC1035 format (required when `state=present`) |
+| `records` | Conditional | list | - | List of records in RFC1035 format (required when `state=present` or `state=absent`) |
 | `ttl` | No | int | - | TTL in seconds (uses plugin default if not specified) |
 | `expiry` | No | int | - | Unix timestamp for expiry (defaults to now + TTL) |
+| `replace` | No | bool | `false` | When `true`, discard all existing batches for this qname+qtype and replace with the new records. When `false` (default), records are added as an independent batch alongside existing ones. |
 | `client_cert` | Yes | path | - | Path to client certificate file |
 | `client_key` | Yes | path | - | Path to client private key file |
 | `ca_cert` | Yes | path | - | Path to CA certificate file |
@@ -162,6 +163,42 @@ pip install -r requirements.txt
     ca_cert: /etc/ssl/ca.crt
 ```
 
+### ACME DNS-01 Wildcard Challenge
+
+Wildcard certificates (e.g. `*.example.com`) require two simultaneous TXT tokens under
+`_acme-challenge.<domain>` when renewed by different jobs or ACME clients at the same time.
+Use `replace: false` (the default) to accumulate independent batches, then delete each token
+individually after validation:
+
+```yaml
+# Each renewal job adds its own batch — both tokens are visible simultaneously in DNS
+- name: Publish ACME challenge token
+  dynamicrecords_rrset:
+    api_url: https://dns-server:8053
+    qname: _acme-challenge.example.com.
+    qtype: TXT
+    ttl: 120
+    records:
+      - '_acme-challenge.example.com. 120 IN TXT "{{ acme_token }}"'
+    # replace: false is the default — appends without disturbing other tokens
+    client_cert: /etc/ssl/client.crt
+    client_key: /etc/ssl/client.key
+    ca_cert: /etc/ssl/ca.crt
+
+# After validation, remove exactly this token (other batches are unaffected)
+- name: Remove ACME challenge token after validation
+  dynamicrecords_rrset:
+    state: absent
+    api_url: https://dns-server:8053
+    qname: _acme-challenge.example.com.
+    qtype: TXT
+    records:
+      - '_acme-challenge.example.com. 120 IN TXT "{{ acme_token }}"'
+    client_cert: /etc/ssl/client.crt
+    client_key: /etc/ssl/client.key
+    ca_cert: /etc/ssl/ca.crt
+```
+
 ### SRV Record (Service Discovery)
 
 ```yaml
@@ -211,15 +248,21 @@ pip install -r requirements.txt
     ca_cert: /etc/ssl/ca.crt
 ```
 
-### Delete Record
+### Delete a Batch of Records
+
+`state: absent` removes the **first batch** whose records exactly match the provided list.
+If two identical batches exist (e.g. two jobs added the same token), each task invocation
+removes exactly one — run the task twice to remove both.
 
 ```yaml
-- name: Delete DNS records
+- name: Delete specific DNS records
   dynamicrecords_rrset:
     state: absent
     api_url: https://dns-server:8053
     qname: old.example.com.
     qtype: A
+    records:
+      - "old.example.com. 300 IN A 192.0.2.99"
     client_cert: /etc/ssl/client.crt
     client_key: /etc/ssl/client.key
     ca_cert: /etc/ssl/ca.crt

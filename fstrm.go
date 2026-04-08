@@ -107,20 +107,17 @@ func (s *SharedServer) processFstrmFrame(f *FstrmFrame) (string, error) {
 
 	switch f.Op {
 	case "add":
-		var expiry time.Time
-		if f.Expiry > 0 {
-			expiry = time.Unix(f.Expiry, 0)
-		} else {
-			ttl := f.TTL
-			if ttl == 0 {
-				ttl = first.Header().Ttl
-			}
-			if ttl == 0 {
-				ttl = s.defaultTTL
-			}
-			expiry = time.Now().Add(time.Duration(ttl) * time.Second)
+		if f.Expiry == 0 {
+			operationsCount.WithLabelValues("add", "framestreams", "error").Inc()
+			return "", fmt.Errorf("expiry is required for op \"add\"")
 		}
-		s.buffer.Add(qname, qtype, records, expiry)
+		expiry := time.Unix(f.Expiry, 0)
+		for _, rr := range records {
+			if rr.Header().Ttl == 0 {
+				rr.Header().Ttl = s.defaultTTL
+			}
+		}
+		s.buffer.Add(qname, qtype, records, expiry, f.Replace)
 		operationsCount.WithLabelValues("add", "framestreams", "success").Inc()
 		return fmt.Sprintf("Added %d records for %s/%s", len(records), qname, dns.TypeToString[qtype]), nil
 

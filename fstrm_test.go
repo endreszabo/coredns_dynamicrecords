@@ -17,6 +17,7 @@ func TestProcessFstrmFrame_Add(t *testing.T) {
 	s := newTestServer()
 	msg, err := s.processFstrmFrame(&FstrmFrame{
 		Op:      "add",
+		Expiry:  time.Now().Add(time.Hour).Unix(),
 		Records: []string{"svc.example.com. 60 IN A 10.0.0.1"},
 	})
 	if err != nil {
@@ -35,7 +36,8 @@ func TestProcessFstrmFrame_Add(t *testing.T) {
 func TestProcessFstrmFrame_AddMultiple(t *testing.T) {
 	s := newTestServer()
 	_, err := s.processFstrmFrame(&FstrmFrame{
-		Op: "add",
+		Op:     "add",
+		Expiry: time.Now().Add(time.Hour).Unix(),
 		Records: []string{
 			"multi.example.com. 60 IN A 10.0.0.1",
 			"multi.example.com. 60 IN A 10.0.0.2",
@@ -51,19 +53,23 @@ func TestProcessFstrmFrame_AddMultiple(t *testing.T) {
 	}
 }
 
-func TestProcessFstrmFrame_AddWithTTL(t *testing.T) {
+func TestProcessFstrmFrame_DefaultTTLApplied(t *testing.T) {
 	s := newTestServer()
-	// TTL field should override record TTL for expiry calculation
+	// Records with TTL=0 should have defaultTTL applied
 	_, err := s.processFstrmFrame(&FstrmFrame{
 		Op:      "add",
-		TTL:     10,
-		Records: []string{"ttl.example.com. 300 IN A 1.2.3.4"},
+		Expiry:  time.Now().Add(time.Hour).Unix(),
+		Records: []string{"ttl.example.com. 0 IN A 1.2.3.4"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if s.buffer.Get("ttl.example.com.", dns.TypeA) == nil {
-		t.Error("record not found in buffer")
+	recs := s.buffer.Get("ttl.example.com.", dns.TypeA)
+	if recs == nil {
+		t.Fatal("record not found in buffer")
+	}
+	if recs[0].Header().Ttl != s.defaultTTL {
+		t.Errorf("TTL: got %d, want %d (defaultTTL)", recs[0].Header().Ttl, s.defaultTTL)
 	}
 }
 
@@ -89,6 +95,7 @@ func TestProcessFstrmFrame_Delete(t *testing.T) {
 	// Add first
 	s.processFstrmFrame(&FstrmFrame{
 		Op:      "add",
+		Expiry:  time.Now().Add(time.Hour).Unix(),
 		Records: []string{"del.example.com. 60 IN A 10.0.0.1"},
 	})
 
@@ -104,6 +111,17 @@ func TestProcessFstrmFrame_Delete(t *testing.T) {
 	}
 	if s.buffer.Get("del.example.com.", dns.TypeA) != nil {
 		t.Error("record still present after delete")
+	}
+}
+
+func TestProcessFstrmFrame_MissingExpiry(t *testing.T) {
+	s := newTestServer()
+	_, err := s.processFstrmFrame(&FstrmFrame{
+		Op:      "add",
+		Records: []string{"exp.example.com. 60 IN A 1.2.3.4"},
+	})
+	if err == nil {
+		t.Error("expected error for missing expiry, got nil")
 	}
 }
 
@@ -221,6 +239,7 @@ func TestHandleFstrmConn_AckNack(t *testing.T) {
 	// Frame 1: valid add — expect ACK with ok:true.
 	frame1, _ := json.Marshal(FstrmFrame{
 		Op:      "add",
+		Expiry:  time.Now().Add(time.Hour).Unix(),
 		Records: []string{"conn.example.com. 60 IN A 192.0.2.1"},
 	})
 	writeFrame(frame1)

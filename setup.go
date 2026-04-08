@@ -3,6 +3,7 @@ package dynamicrecords
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/coredns/caddy"
 	"github.com/coredns/coredns/core/dnsserver"
@@ -41,12 +42,13 @@ func setup(c *caddy.Controller) error {
 
 func parseDynamicRecords(c *caddy.Controller) (*DynamicRecords, *SharedServer, error) {
 	// Configuration for shared server
-	httpAddr := ":8053"
-	fstrmAddr := ""
-	certFile := ""
-	keyFile := ""
-	caFile := ""
-	defaultTTL := uint32(300)
+	httpAddr        := ":8053"
+	fstrmAddr       := ""
+	certFile        := ""
+	keyFile         := ""
+	caFile          := ""
+	defaultTTL      := uint32(300)
+	cleanupInterval := time.Duration(0) // 0 → use NewRRBuffer default (60s)
 
 	for c.Next() {
 		for c.NextBlock() {
@@ -85,6 +87,15 @@ func parseDynamicRecords(c *caddy.Controller) (*DynamicRecords, *SharedServer, e
 					return nil, nil, c.Errf("invalid TTL: %v", err)
 				}
 				defaultTTL = uint32(ttl)
+			case "cleanup_interval":
+				if !c.NextArg() {
+					return nil, nil, c.ArgErr()
+				}
+				secs, err := strconv.Atoi(c.Val())
+				if err != nil || secs <= 0 {
+					return nil, nil, c.Errf("cleanup_interval must be a positive integer (seconds): %v", err)
+				}
+				cleanupInterval = time.Duration(secs) * time.Second
 			default:
 				return nil, nil, c.Errf("unknown property '%s'", c.Val())
 			}
@@ -97,7 +108,7 @@ func parseDynamicRecords(c *caddy.Controller) (*DynamicRecords, *SharedServer, e
 	}
 
 	// Get or create the shared server instance
-	sharedServer, err := GetOrCreateSharedServer(httpAddr, fstrmAddr, certFile, keyFile, caFile, defaultTTL)
+	sharedServer, err := GetOrCreateSharedServer(httpAddr, fstrmAddr, certFile, keyFile, caFile, defaultTTL, cleanupInterval)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -53,6 +53,18 @@ options:
             - If not specified, uses current time + TTL
         type: int
         required: false
+    replace:
+        description:
+            - When C(true), discard all existing batches for the same qname+qtype and replace
+              them with this single new batch.
+            - When C(false) (the default), the new records are added as an independent batch
+              alongside any existing batches for the same qname+qtype. This is the correct
+              mode for ACME DNS-01 wildcard challenges where two concurrent renewal jobs each
+              need their own TXT token visible simultaneously.
+            - Only meaningful when C(state=present).
+        type: bool
+        default: false
+        required: false
     client_cert:
         description:
             - Path to client certificate file for mTLS authentication
@@ -125,6 +137,29 @@ EXAMPLES = r'''
     api_url: https://dns-server:8053
     records:
       - '_acme-challenge.example.com. 120 IN TXT "validation-token-here"'
+    client_cert: /etc/ssl/client.crt
+    client_key: /etc/ssl/client.key
+    ca_cert: /etc/ssl/ca.crt
+
+# ACME DNS-01 wildcard challenge: add a token without disturbing tokens from other renewal jobs
+- name: Add ACME challenge token (append, do not replace existing tokens)
+  dynamicrecords_rrset:
+    api_url: https://dns-server:8053
+    ttl: 120
+    records:
+      - '_acme-challenge.example.com. 120 IN TXT "{{ acme_token }}"'
+    client_cert: /etc/ssl/client.crt
+    client_key: /etc/ssl/client.key
+    ca_cert: /etc/ssl/ca.crt
+  # replace defaults to false — the token is appended as its own batch
+
+# Clean up exactly one ACME token after validation (leaves other tokens intact)
+- name: Remove ACME challenge token
+  dynamicrecords_rrset:
+    state: absent
+    api_url: https://dns-server:8053
+    records:
+      - '_acme-challenge.example.com. 120 IN TXT "{{ acme_token }}"'
     client_cert: /etc/ssl/client.crt
     client_key: /etc/ssl/client.key
     ca_cert: /etc/ssl/ca.crt
@@ -204,14 +239,15 @@ except ImportError:
 from ansible.module_utils.basic import AnsibleModule, missing_required_lib
 
 
-def add_records(module, api_url, records, ttl, expiry,
+def add_records(module, api_url, records, ttl, expiry, replace,
                 client_cert, client_key, ca_cert, validate_certs, timeout):
-    """Add or update records via the API"""
+    """Add records via the API (append or replace batch)"""
 
     url = f"{api_url}/records"
 
     payload = {
-        "records": records
+        "records": records,
+        "replace": replace,
     }
 
     if ttl is not None:
@@ -306,6 +342,7 @@ def run_module():
         records=dict(type='list', elements='str', required=True),
         ttl=dict(type='int', required=False),
         expiry=dict(type='int', required=False),
+        replace=dict(type='bool', default=False),
         client_cert=dict(type='path', required=True),
         client_key=dict(type='path', required=True),
         ca_cert=dict(type='path', required=True),
@@ -334,6 +371,7 @@ def run_module():
     records = module.params['records']
     ttl = module.params['ttl']
     expiry = module.params['expiry']
+    replace = module.params['replace']
     client_cert = module.params['client_cert']
     client_key = module.params['client_key']
     ca_cert = module.params['ca_cert']
@@ -371,9 +409,9 @@ def run_module():
         module.exit_json(**result)
 
     if state == 'present':
-        # Add or update records
+        # Add records (append or replace batch)
         success, api_response = add_records(
-            module, api_url, records, ttl, expiry,
+            module, api_url, records, ttl, expiry, replace,
             client_cert, client_key, ca_cert, validate_certs, timeout
         )
 
